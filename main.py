@@ -1,7 +1,7 @@
 from PyQt5.QtWidgets import QApplication
 
-from geometry import GridLayout
-from scene import SceneGroup, SceneItem, SceneManager
+from entity import GridLayout, SceneGroup, SceneItem
+from scene import SceneManager
 
 
 class App(QApplication):

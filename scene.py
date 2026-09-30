@@ -3,193 +3,8 @@ from PyQt5.QtGui import QBrush, QMouseEvent, QPainter, QPaintEvent, QPen
 from PyQt5.QtWidgets import QWidget
 
 from colors import Alpha, Colors, with_alpha
-from geometry import Anchors, Rect, SnapPrimitive
-from layout import LayoutManager, SnapEngine
-
-
-class SceneItem:
-    def __init__(self):
-        self._parent = None
-        self._rect = Rect()
-        self._selected = False
-        self._resizeError = ([0.0, 0.0], [0.0, 0.0])
-        self._snapAnchors = self._rect.getSnapAnchors()
-
-    def move(self, dx, dy):
-        self._rect.move(dx, dy)
-
-    def contains(self, x, y):
-        return self._rect.contains(x, y)
-
-    def selected(self):
-        return self._selected
-
-    def setSelected(self, selected):
-        self._selected = selected
-
-    def setGeometry(self, x, y, width, height):
-        self._rect.update(x, y, width, height)
-
-    def resetResizeError(self):
-        self._resizeError = ([0.0, 0.0], [0.0, 0.0])
-
-    def getSnapAnchors(self):
-        return self._snapAnchors
-
-
-class SceneGroup:
-    def __init__(self):
-        self._parent = None
-        self._children = []
-        self._padding = 15
-        self._selected = False
-
-        self._snapAnchors = Anchors(
-            x=[
-                SnapPrimitive(self, lambda: self._rect.left()),
-                SnapPrimitive(self, lambda: self._rect.right()),
-                SnapPrimitive(self, lambda: self._rect.centerX()),
-            ],
-            y=[
-                SnapPrimitive(self, lambda: self._rect.top()),
-                SnapPrimitive(self, lambda: self._rect.bottom()),
-                SnapPrimitive(self, lambda: self._rect.centerY()),
-            ],
-            w=[
-                SnapPrimitive(self, lambda: self._rect.width()),
-            ],
-            h=[
-                SnapPrimitive(self, lambda: self._rect.height()),
-            ],
-        )
-
-    def addChild(self, child):
-        child._parent = self
-        self._children.append(child)
-
-    def getSnapAnchors(self):
-        return self._snapAnchors
-
-    @property
-    def _rect(self):
-        if not self._children:
-            return Rect()
-
-        first = self._children[0]._rect
-
-        minX = first.left()
-        maxX = first.right()
-        minY = first.top()
-        maxY = first.bottom()
-
-        for child in self._children[1:]:
-            rect = child._rect
-            minX = min(minX, rect.left())
-            maxX = max(maxX, rect.right())
-            minY = min(minY, rect.top())
-            maxY = max(maxY, rect.bottom())
-
-        rect = Rect(
-            minX,
-            minY,
-            maxX - minX + 1,
-            maxY - minY + 1,
-        )
-
-        rect.adjust(self._padding)
-        return rect
-
-    def move(self, dx, dy):
-        for child in self._children:
-            child.move(dx, dy)
-
-    def contains(self, x, y):
-        return self._rect.contains(x, y)
-
-    def selected(self):
-        return self._selected
-
-    def setSelected(self, selected):
-        self._selected = selected
-
-    def setGeometry(self, x, y, width, height):
-        self.resize(Rect(x, y, width, height))
-
-    def resize(self, newRect):
-        oldRect = self._rect.adjusted(-self._padding)
-        newRect = newRect.adjusted(-self._padding)
-
-        oldWidth = oldRect.width()
-        oldHeight = oldRect.height()
-
-        newWidth = newRect.width()
-        newHeight = newRect.height()
-
-        if oldWidth <= 0 or oldHeight <= 0:
-            return
-
-        for child in self._children:
-            self._resizeChild(
-                child,
-                oldRect,
-                newRect,
-                oldWidth,
-                oldHeight,
-                newWidth,
-                newHeight,
-            )
-
-    def _resizeChild(
-        self,
-        child,
-        oldRect,
-        newRect,
-        oldWidth,
-        oldHeight,
-        newWidth,
-        newHeight,
-    ):
-        rect = child._rect
-
-        sx0 = (rect.left() - oldRect.left()) / oldWidth
-        sy0 = (rect.top() - oldRect.top()) / oldHeight
-        sx1 = (rect.right() - oldRect.right()) / oldWidth
-        sy1 = (rect.bottom() - oldRect.bottom()) / oldHeight
-
-        errorLeft, errorTop = child._resizeError[0]
-        errorRight, errorBottom = child._resizeError[1]
-
-        newLeft = newRect.left() + newWidth * sx0 + errorLeft
-        newTop = newRect.top() + newHeight * sy0 + errorTop
-        newRight = newRect.right() + newWidth * sx1 + errorRight
-        newBottom = newRect.bottom() + newHeight * sy1 + errorBottom
-
-        left = round(newLeft)
-        top = round(newTop)
-        right = round(newRight)
-        bottom = round(newBottom)
-
-        child._resizeError = (
-            (
-                newLeft - left,
-                newTop - top,
-            ),
-            (
-                newRight - right,
-                newBottom - bottom,
-            ),
-        )
-
-        child.setGeometry(
-            left,
-            top,
-            right - left + 1,
-            bottom - top + 1,
-        )
-
-    def finishResize(self):
-        for child in self._children:
-            child.resetResizeError()
+from entity import SceneGroup
+from snap import LayoutManager, SnapEngine
 
 
 class SceneManager(QWidget):
@@ -270,6 +85,7 @@ class SceneManager(QWidget):
 
         if item is not None:
             self._layoutManager.beginDrag(event, item)
+
             item.getSnapAnchors().setActive(False)
 
             if self._layoutManager.isMoving():
@@ -285,11 +101,12 @@ class SceneManager(QWidget):
             return
 
         self._snapHints = self._layoutManager.drag(event, item)
+
         self.update()
 
         event.accept()
 
-    def mouseReleaseEvent(self, event):
+    def mouseReleaseEvent(self, event: QMouseEvent):
         item, action = self._layoutManager.endDrag()
 
         if item is not None:
@@ -312,23 +129,35 @@ class SceneManager(QWidget):
 
         painter.setPen(QPen(Qt.red))
 
-        if self._snapHints.snapX is not None:
-            x = round(self._snapHints.snapX)
-            painter.drawLine(x, 0, x, self.height())
+        for match in self._snapHints:
+            primitive = match.primitive
+            value = round(primitive.value())
 
-        if self._snapHints.snapY is not None:
-            y = round(self._snapHints.snapY)
-            painter.drawLine(0, y, self.width(), y)
+            if primitive.axis == "x":
+                painter.drawLine(
+                    value,
+                    0,
+                    value,
+                    self.height(),
+                )
+
+            elif primitive.axis == "y":
+                painter.drawLine(
+                    0,
+                    value,
+                    self.width(),
+                    value,
+                )
 
     def _paintWindow(self, painter, rect):
         painter.setBrush(QBrush(Colors.DEFAULT_COLOR))
         painter.setPen(QPen(Colors.DEFAULT_BORDER))
 
         qtRect = QRect(
-            rect.left(),
-            rect.top(),
-            rect._width,
-            rect._height,
+            round(rect.left()),
+            round(rect.top()),
+            round(rect.width()),
+            round(rect.height()),
         )
 
         painter.drawRect(qtRect.adjusted(1, 1, -1, -1))
@@ -353,6 +182,7 @@ class SceneManager(QWidget):
 
         for i in range(layout._xDiv + 1):
             x = round(i * cellWidth)
+
             painter.drawLine(
                 x,
                 0,
@@ -362,6 +192,7 @@ class SceneManager(QWidget):
 
         for i in range(layout._yDiv + 1):
             y = round(i * cellHeight)
+
             painter.drawLine(
                 0,
                 y,
